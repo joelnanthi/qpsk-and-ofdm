@@ -1,15 +1,19 @@
-clear; clc; close all;
+%task_1.m
+clear; 
+clear; 
+clc; 
+close all;
 
-%% Generate TX audio
+%TX audio
 disp('Running transmitter...');
 tx1_audio_ofdm;
 
-load('tx_workspace.mat', 'tx_audio');
+load('tx_config.mat', 'tx_audio');
 
 params = ofdm_params();
 Fsamp = params.Fsamp;
 
-%% Play and record through audio channel
+%Play and record through audio channel
 
 % Add silence before and after transmission
 silence_time = 0.5; % seconds
@@ -28,16 +32,16 @@ pause(0.2);
 disp('Playing OFDM signal...');
 playblocking(player);
 
-pause(0.2);
+pause(0.4);
 
 stop(recObj);
 disp('Recording stopped.');
 
 rx_audio = getaudiodata(recObj).';
 
-%% Save recorded audio for receiver
+%Save recorded audio for receiver
 audiowrite('recorded_ofdm.wav', rx_audio, Fsamp);
 
-%% Run receiver
+%Running receiver
 disp('Running receiver...');
 rx1_audio_ofdm;

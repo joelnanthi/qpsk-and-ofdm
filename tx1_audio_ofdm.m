@@ -1,6 +1,6 @@
+%tx1_audio_ofdm.m
 clear; clc; close all;
 
-%% Parameter
 params = ofdm_params();
 
 Fsamp = params.Fsamp;
@@ -20,36 +20,39 @@ decoding_active = params.decoding_active;
 
 header_length = params.header_length;
 
-%% Source coding
-Nbits = 2e4;
-        
-if mod(Nbits,2) ~= 0
-    error("The number of bits must be even");
-end
-
 %bits = randi([0 1], 1, Nbits);
 fid = fopen('input.txt','r');
 fileData = fread(fid,'*uint8');
 fclose(fid);
 file_len = length(fileData);
+fprintf('File: %d bytes = %d bits\n', length(fileData), length(fileData)*8);
+
+if file_len*8 < 20000
+    warning('File too small! Need >= 20000 bits. Have %d bits', file_len*8);
+end
 
 %convert bytes to bits
 data_bits = double(reshape(de2bi(fileData, 8, 'left-msb').', 1, []));
 
-% 32-bit header with file length for receiver to know how many bytes to recover
+%32-bit header with file length for receiver to know how many bytes to recover
 header = double(de2bi(file_len, 32, 'left-msb'));
 header = header(:).';
 
-% Complete bit stream: header + file data
+%header + data from file
 bits = [header  data_bits];
 Nbits = length(bits);
 
+if mod(Nbits, 2) ~= 0
+    bits  = [bits 0];   % pad one bit to make even
+    Nbits = length(bits);
+end
+
 fprintf('File: %d bytes = %d bits\n', file_len, Nbits);
 
-%% Channel Coding
+%Channel Coding
 [coded_bits, N_coded_bits] = channel_coding.encode(bits, decoding_active);
 
-%% QPSK Modulation
+%QPSK Modulation
 [a, N_mod_symbols] = qpsk_modulation.modulate(coded_bits, params);
 
 %% ofdm symbol structure
@@ -133,27 +136,27 @@ X_preamble(1:2:end) = 2 * P;
 x_preamble = ifft(X_preamble, Nsc);
 x_preamble_cp = [x_preamble(end-Ncp+1:end) x_preamble];
 
-%% combine preamble, header, data, and tail guard
+% combine preamble, header, data, and tail guard
 N_tail_guard = params.N_tail_guard;
 ofdm_symbol_len = Nsc + Ncp;
 tx_bb = [x_preamble_cp, x_header_cp, tx_data_bb, zeros(1, N_tail_guard*ofdm_symbol_len)];
 
-%% Upsampling
+% Upsampling
 tx_bb_up = interp(tx_bb, L);
-%[tx_bb_zero, tx_bb_up_vis] = plot_upsampling_visualization(tx_bb, L, 30);
 
 n = 0:length(tx_bb_up)-1;
 t = n/Fsamp;
 
-%% Upconversion
+%Upconversion
 I = real(tx_bb_up);
 Q = imag(tx_bb_up);
 
 tx_audio = I.*cos(2*pi*fc*t) - Q.*sin(2*pi*fc*t);
-% Normalize 
+
+%Normalization for audio channel (0.8 or 0.9) 
 tx_audio = tx_audio / max(abs(tx_audio)) * 0.8;
 
-%% Bit Calculation
+%Bit Calculation
 N_total_ofdm_symbols = 1 + 1 + Nofdm_data_symbols + N_tail_guard; % preamble + header + data + tail
 T_total_theory = N_total_ofdm_symbols * T_sym;
 T_total_audio = length(tx_audio)/Fsamp;
@@ -164,8 +167,48 @@ fprintf('Theoretical frame duration: %.3f s\n', T_total_theory);
 fprintf('Audio frame duration: %.3f s\n', T_total_audio);
 fprintf('bit rate: %.2f kbps\n', bit_rate/1000);
 
+%PLOT 1
+figure;
+t_plot = (0:length(tx_audio)-1)/Fsamp;
+plot(t_plot, tx_audio, 'LineWidth', 0.5);
+title('Transmitted Signal (Time Domain)', 'FontSize', 14);
+xlabel('Time (s)', 'FontSize', 12);
+ylabel('Amplitude', 'FontSize', 12);
+grid on;
+
+%PLOT 2
+figure;
+[Pxx, F_pxx] = pwelch(tx_audio, hamming(1024), 512, 1024, Fsamp);
+plot(F_pxx/1000, 10*log10(Pxx), 'LineWidth', 1.5);
+title('Transmitted Signal Power Spectral Density', 'FontSize', 14);
+xlabel('Frequency (kHz)', 'FontSize', 12);
+ylabel('PSD (dB/Hz)', 'FontSize', 12);
+xline(fc/1000, 'r--', sprintf('fc = %d Hz', fc), ...
+    'FontSize', 12, 'LineWidth', 1.5);
+grid on;
+
+%PLOT 3 - PAPR
+signal_power = abs(tx_audio).^2;
+PAPR_dB      = 10*log10(max(signal_power)/mean(signal_power));
+fprintf('PAPR = %.2f dB\n', PAPR_dB);
+if PAPR_dB > 10
+    fprintf('WARNING: High PAPR (%.1f dB) — consider scrambler\n', PAPR_dB);
+end
+figure;
+papr_thresh = 0:0.1:20;
+ccdf        = zeros(size(papr_thresh));
+for k = 1:length(papr_thresh)
+    ccdf(k) = mean(10*log10(signal_power/mean(signal_power)) > papr_thresh(k));
+end
+semilogy(papr_thresh, ccdf+1e-6, 'LineWidth', 2);
+title(sprintf('PAPR CCDF  (PAPR = %.2f dB)', PAPR_dB), 'FontSize', 14);
+xlabel('PAPR Threshold (dB)', 'FontSize', 12);
+ylabel('Probability (PAPR > threshold)', 'FontSize', 12);
+xline(PAPR_dB, 'r--', sprintf('%.1f dB', PAPR_dB), 'FontSize', 11);
+grid on;
+
 %% save data
-save('tx_workspace.mat', ...
+save('tx_config.mat', ...
      'tx_audio', ...
      'bits', ...
      'N_coded_bits', ...
@@ -173,3 +216,4 @@ save('tx_workspace.mat', ...
      'bit_rate');
 
 audiowrite('ofdm_tx.wav', tx_audio, Fsamp);
+fprintf('Saved ofdm_tx.wav\n');

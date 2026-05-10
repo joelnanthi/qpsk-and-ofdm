@@ -1,8 +1,9 @@
+%rx1_audio_ofdm.m
 clear; clc; close all;
 
-%% check if tx already run
-if ~isfile('tx_workspace.mat')
-    error('tx_workspace.mat not found');
+%check if tx already run
+if ~isfile('tx_config.mat')
+    error('tx_config.mat not found');
 end
 
 if ~isfile('recorded_ofdm.wav')
@@ -31,7 +32,7 @@ decoding_active = params.decoding_active;
 header_length = params.header_length;
 
 %% Receiver side
-load('tx_workspace.mat', ...
+load('tx_config.mat', ...
      'bits', ...
      'N_mod_symbols', ...
      'bit_rate');
@@ -46,17 +47,33 @@ end
 n_rx = 0:length(rx_audio)-1;
 t_rx = n_rx/Fsamp;
 
+%PLOT 1 - RXD signal time domain
+figure;
+plot(t_rx, rx_audio, 'LineWidth', 0.3);
+title('Received Signal (Time Domain)', 'FontSize', 14);
+xlabel('Time (s)', 'FontSize', 12);
+ylabel('Amplitude', 'FontSize', 12);
+grid on;
+
 %% Down Conversion and LPF
 y_I = rx_audio.*cos(2*pi*fc*t_rx);
 y_Q = -rx_audio.*sin(2*pi*fc*t_rx);
 
 % Low Pass Filter
-[B,A]=butter(8,0.1);
+[B,A] = butter(8,0.1);
 [H,F] = freqz(B,A,1024,Fsamp);
 
 r_I = filter(B,A,y_I);
 r_Q = filter(B,A,y_Q);
 r_bb = r_I + 1j*r_Q;
+
+%PLOT 2 Baseband signal amplitude
+figure;
+plot(abs(r_bb), 'LineWidth', 0.5);
+title('Received Baseband Signal Magnitude', 'FontSize', 14);
+xlabel('Sample index (downsampled)', 'FontSize', 12);
+ylabel('|r_{bb}|', 'FontSize', 12);
+grid on;
 
 % Downsample
 r_bb = r_bb(1:L:end);
@@ -208,6 +225,16 @@ fprintf('Recovered data OFDM symbols: %d\n', size(Y_data,2));
 % Initial Equalization using channel estimated from preamble
 eq_data = Y_data ./ repmat(H_estimated_interpolated, 1, size(Y_data,2));
 
+%PLOT - Constellation before estimation
+figure;
+Yeq_raw = eq_data(:,1);
+scatter(real(Yeq_raw(data_idx)), imag(Yeq_raw(data_idx)), 20,'b','filled');
+hold on;
+scatter(real(Yeq_raw(pilot_idx)), imag(Yeq_raw(pilot_idx)),100,'r','x','LineWidth',2);
+title('Constellation BEFORE Pilot Phase Correction','FontSize',14);
+xlabel('In-phase','FontSize',12); ylabel('Quadrature','FontSize',12);
+legend('Data','Pilots','FontSize',11); grid on; axis equal;
+
 % continuous pilot correction
 pilot_ratio_matrix = zeros(4, size(eq_data,2));
 
@@ -222,6 +249,27 @@ for m = 1: size(eq_data,2)
     % Equalization
     eq_data(:,m) = eq_data(:,m) * exp(-1j*phase_error);
 end
+
+%PLOT - Pilot phase eveolution over time
+figure;
+plot(pilot_ratio_matrix.','LineWidth',1.5);
+title('Continuous Pilot Phase Evolution Over Time','FontSize',14);
+xlabel('OFDM Symbol Index','FontSize',12);
+ylabel('Phase (radians)','FontSize',12);
+legend(arrayfun(@(x) sprintf('Pilot sc %d',pilot_idx(x)), ...
+    1:length(pilot_idx),'UniformOutput',false),'FontSize',10);
+yline(0,'k--','Ideal = 0');
+grid on;
+
+%PLOT - Pilot phase vs frequency
+figure;
+phase_vs_freq = angle(eq_data(pilot_idx,1)./pilot_value.');
+plot(pilot_idx, phase_vs_freq,'ro-','LineWidth',2,'MarkerSize',8);
+title('Pilot Phase vs Subcarrier Index','FontSize',14);
+xlabel('Subcarrier Index','FontSize',12);
+ylabel('Phase (radians)','FontSize',12);
+yline(0,'k--','Ideal = 0'); grid on;
+xlim([0 Nsc+1]);
 
 %% Extract only payload data subcarriers
 data_decoded_symbols_matrix = eq_data(data_idx, :);
@@ -291,3 +339,4 @@ axis equal;
 
 delete('recorded_ofdm.wav');
 delete('tx_workspace.mat');
+

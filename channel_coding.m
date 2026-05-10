@@ -1,3 +1,4 @@
+%channel_coding.m
 classdef channel_coding
     methods(Static)
 

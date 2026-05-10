@@ -1,3 +1,4 @@
+%ofdm_params.m
 function params = ofdm_params()
     %% Basic parameters
     params.Fsamp = 44100; % audio sampling frequency
