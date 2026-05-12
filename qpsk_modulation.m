@@ -6,22 +6,23 @@ classdef qpsk_modulation
 
             bits_per_symbol = params.bits_per_symbol;
 
-            pairs = reshape(bits, bits_per_symbol, []).';
+            bit_pairs = reshape(bits, bits_per_symbol, []).';
             N_mod_symbols = length(bits)/bits_per_symbol;
             a = zeros(1, N_mod_symbols);
 
             idx = 1;
             for i = 1:N_mod_symbols
-                b1 = pairs(i,1);
-                b2 = pairs(i,2);
-
-                if (b1==0) && (b2==0)
+                b1 = bit_pairs(i,1);
+                b2 = bit_pairs(i,2);
+                
+                %Constellation pairs - Gray coding
+                if (b1 == 0 && b2 == 0)
                     a(idx) = 1 + 1j;
-                elseif (b1==1) && (b2==0)
+                elseif (b1 == 1 && b2 == 0)
                     a(idx) = -1 + 1j;
-                elseif (b1==1) && (b2==1)
+                elseif (b1 == 1 && b2 == 1)
                     a(idx) = -1 - 1j;
-                elseif (b1==0) && (b2==1)
+                elseif (b1 == 0 && b2 == 1)
                     a(idx) = 1 - 1j;
                 end
 
@@ -41,13 +42,13 @@ classdef qpsk_modulation
                 I = real(sym);
                 Q = imag(sym);
 
-                if I >= 0 && Q >= 0
+                if (I >= 0 && Q >= 0)
                     bits_decoded(idx:idx+1) = [0 0];
 
-                elseif I < 0 && Q >= 0
+                elseif (I < 0 && Q >= 0)
                     bits_decoded(idx:idx+1) = [1 0];
 
-                elseif I < 0 && Q < 0
+                elseif (I < 0 && Q < 0)
                     bits_decoded(idx:idx+1) = [1 1];
 
                 else

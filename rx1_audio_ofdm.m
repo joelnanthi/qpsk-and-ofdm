@@ -1,5 +1,5 @@
 %rx1_audio_ofdm.m
-clear; clc; close all;
+%clear; clc; close all;
 
 %check if tx already run
 if ~isfile('tx_config.mat')
@@ -10,19 +10,17 @@ if ~isfile('recorded_ofdm.wav')
     error('recorded_ofdm.wav not found');
 end
 
-%% Parameter
+%Parameter
 params = ofdm_params();
 
-Fsamp = params.Fsamp;
+Fs = params.Fs;
 fc = params.fc;
-Nsc = params.Nsc;
-Ncp = params.Ncp;
+N_sc = params.N_sc;
+N_cp = params.N_cp;
 L = params.L;
-
 pilot_idx = params.pilot_idx;
 pilot_value = params.pilot_value;
 data_idx = params.data_idx;
-
 M = params.M;
 bits_per_symbol = params.bits_per_symbol;
 N_data = params.N_data;
@@ -31,43 +29,52 @@ decoding_active = params.decoding_active;
 
 header_length = params.header_length;
 
-%% Receiver side
-load('tx_config.mat', ...
-     'bits', ...
-     'N_mod_symbols', ...
-     'bit_rate');
+%Receiver side
+load('tx_config.mat','bits','N_mod_symbols','bit_rate','coded_symbols');
 
 [rx_audio, Fs_read] = audioread('recorded_ofdm.wav');
 rx_audio = rx_audio.';
 
-if Fs_read ~= Fsamp
+if Fs_read ~= Fs
     error('Sampling frequency mismatch');
 end
 
 n_rx = 0:length(rx_audio)-1;
-t_rx = n_rx/Fsamp;
+t_rx = n_rx/Fs;
 
-%PLOT 1 - RXD signal time domain
+%PLOT - RXD signal time domain
 figure;
-plot(t_rx, rx_audio, 'LineWidth', 0.3);
+plot((0:length(rx_audio)-1)/Fs, rx_audio, 'LineWidth', 0.3);
+%plot(t_rx, rx_audio, 'LineWidth', 0.3);
 title('Received Signal (Time Domain)', 'FontSize', 14);
 xlabel('Time (s)', 'FontSize', 12);
 ylabel('Amplitude', 'FontSize', 12);
 grid on;
 
-%% Down Conversion and LPF
+%PLOT-Received signal spectrum
+figure;
+[Pxx_rx, F_rx] = pwelch(rx_audio, hamming(1024), 512, 1024, Fs);
+plot(F_rx/1000, 10*log10(Pxx_rx), 'r', 'LineWidth', 1.5);
+title('Received Signal Spectrum', 'FontSize', 14);
+xlabel('Frequency (kHz)', 'FontSize', 12);
+ylabel('PSD (dB/Hz)', 'FontSize', 12);
+xline(fc/1000, 'r--', sprintf('fc = %d Hz', fc), 'FontSize', 11);
+grid on;
+xlim([0 Fs/2000]);
+
+%Down Conversion
 y_I = rx_audio.*cos(2*pi*fc*t_rx);
 y_Q = -rx_audio.*sin(2*pi*fc*t_rx);
 
-% Low Pass Filter
+%LPF
 [B,A] = butter(8,0.1);
-[H,F] = freqz(B,A,1024,Fsamp);
+[H,F] = freqz(B,A,1024,Fs);
 
 r_I = filter(B,A,y_I);
 r_Q = filter(B,A,y_Q);
 r_bb = r_I + 1j*r_Q;
 
-%PLOT 2 Baseband signal amplitude
+%PLOT- Baseband signal amplitude
 figure;
 plot(abs(r_bb), 'LineWidth', 0.5);
 title('Received Baseband Signal Magnitude', 'FontSize', 14);
@@ -75,17 +82,15 @@ xlabel('Sample index (downsampled)', 'FontSize', 12);
 ylabel('|r_{bb}|', 'FontSize', 12);
 grid on;
 
-% Downsample
+%Downsampling
 r_bb = r_bb(1:L:end);
 
-%% Synchronization and Removal of Cyclic Prefix
-half_pilot = Nsc/2;
+%Synchronization and Removal of Cyclic Prefix
+half_pilot = N_sc/2;
 last_index = (length(r_bb)-(2*half_pilot))+1;
 correlation = zeros(1,last_index);
 
-% this loop is sliding the window to calculate correlation for
-% different side by side half pilot
-% the output is vector correlation that represent the index and its correlation
+%correlation window
 for idx = 1:last_index
     first_idx  = idx : idx+half_pilot-1;
     second_idx = idx+half_pilot : idx+2*half_pilot-1;
@@ -99,57 +104,55 @@ for idx = 1:last_index
     correlation(idx) = num / denum;
 end
 
-% detemining the periodic pilot (can be tuned)
+%Periodic pilot
 [~, max_corr_idx] = max(correlation);
 periodic_pilot = max_corr_idx;
 
 figure;
-plot(correlation, 'LineWidth', 1.2, 'HandleVisibility', 'off'); hold on;
+plot(correlation, 'LineWidth', 1.2, 'HandleVisibility', 'off');
+hold on;
 xline(periodic_pilot, '--r', 'LineWidth', 2.5);
 xlabel('Time (s)', 'FontSize',20);
 ylabel('Normalized Correlation', 'FontSize',20);
+title("Correlation Window",'FontSize',12);
 legend('Highest correlation', 'FontSize',25);
 xlim([1 5505]) 
 set(gca, 'FontSize', 20, 'LineWidth', 1.5);
 
-% FFT Using Coarse Timing
+%FFT Using Coarse Timing
 timing_offset = 5;
 fprintf('Timing offset = %d\n', timing_offset);
 fft_start_first = periodic_pilot - timing_offset; % assume the coarse timing already in CP
-ofdm_symbol_len = Nsc + Ncp; %148
+ofdm_symbol_len = N_sc + N_cp; %148
 num_symbols = floor((length(r_bb)-fft_start_first+1) / ofdm_symbol_len); % rough number after periodic pilot
-fft_output = zeros(Nsc,num_symbols); % Row: subcarrier idx | Col: OFDM symbol idx: 
+fft_output = zeros(N_sc,num_symbols); % Row: subcarrier idx | Col: OFDM symbol idx: 
 
 for i = 1:num_symbols
     fft_start = fft_start_first + ((i-1)*ofdm_symbol_len);
-    fft_input = r_bb(fft_start:fft_start+Nsc-1);
-    fft_output(:,i) = fft(fft_input, Nsc);
+    fft_input = r_bb(fft_start:fft_start+N_sc-1);
+    fft_output(:,i) = fft(fft_input, N_sc);
 end
 
-%% Channel Estimation from Preamble
-% Preamble
-rng(100, 'twister');
-P = sign(randn(1, Nsc/2));
-X_pilot = zeros(Nsc,1);
+%Channel Estimation from Preamble
+rng(100, 'twister'); %Same state as TX
+P = sign(randn(1, N_sc/2));
+X_pilot = zeros(N_sc,1);
 X_pilot(1:2:end) = 2*P.';
 
-% Channel Estimation from the pilot
+%Channel Estimation from the pilot
 Y_pilot = fft_output(:,1);
-active_pilot_idx = 1:2:Nsc; % since only odd (matlab) has pilot
-symbol_idx = (1:Nsc).';
+active_pilot_idx = 1:2:N_sc; % since only odd (matlab) has pilot
+symbol_idx = (1:N_sc).';
 
-H_estimated = zeros(Nsc,1);
+H_estimated = zeros(N_sc,1);
 H_estimated(active_pilot_idx) = Y_pilot(active_pilot_idx) ./ X_pilot(active_pilot_idx);
 
 % Interpolate missing subcarriers
-H_estimated_interpolated = interp1(active_pilot_idx.', ...
-                H_estimated(active_pilot_idx), ...
-                symbol_idx, ...
-                'linear', ...
-                'extrap');
+H_estimated_interpolated = interp1(active_pilot_idx.',H_estimated(active_pilot_idx), ...
+                symbol_idx,'linear','extrap');
 
 % convert to time-domain impulse response for periodic pilot evaluation
-h_estimated = ifft(H_estimated_interpolated, Nsc);
+h_estimated = ifft(H_estimated_interpolated, N_sc);
 
 figure;
 stem(abs(h_estimated), 'filled');
@@ -157,9 +160,9 @@ grid on;
 xlabel('Delay sample');
 ylabel('|h[n]|');
 title('Estimated Channel Impulse Response');
-xline(Ncp, '--r', 'CP length');
+xline(N_cp, '--r', 'CP length');
 
-%% Header Decoding
+%Header Decoding
 % expected length bit message length
 if decoding_active == true
     memory_length = 5;
@@ -168,7 +171,7 @@ else
     N_coded_header_bits = header_length;
 end
 
-% message-legth symbol length
+% message-length symbol length
 N_header_mod_symbols = N_coded_header_bits / bits_per_symbol;
 
 Y_header = fft_output(:,2);
@@ -215,7 +218,7 @@ Nofdm_data_symbols_from_header = ceil(N_payload_mod_symbols / N_data);
 
 fprintf('Estimated ofdm payload length from header: %d bits\n', Nofdm_data_symbols_from_header);
 
-%% Equalization and Data Decoding
+%Equalization and Data Decoding
 % OFDM data symbol
 Y_data = fft_output(:, 3:end);
 Y_data = Y_data(:, 1:Nofdm_data_symbols_from_header);
@@ -246,7 +249,7 @@ for m = 1: size(eq_data,2)
     phase_error = angle(mean(pilot_ratio_matrix)); % average error per symbol
     pilot_ratio_matrix(:, m) = pilot_ratio_matrix; % matrix for saving correction freq and time
     
-    % Equalization
+    %Equalization
     eq_data(:,m) = eq_data(:,m) * exp(-1j*phase_error);
 end
 
@@ -261,17 +264,8 @@ legend(arrayfun(@(x) sprintf('Pilot sc %d',pilot_idx(x)), ...
 yline(0,'k--','Ideal = 0');
 grid on;
 
-%PLOT - Pilot phase vs frequency
-figure;
-phase_vs_freq = angle(eq_data(pilot_idx,1)./pilot_value.');
-plot(pilot_idx, phase_vs_freq,'ro-','LineWidth',2,'MarkerSize',8);
-title('Pilot Phase vs Subcarrier Index','FontSize',14);
-xlabel('Subcarrier Index','FontSize',12);
-ylabel('Phase (radians)','FontSize',12);
-yline(0,'k--','Ideal = 0'); grid on;
-xlim([0 Nsc+1]);
 
-%% Extract only payload data subcarriers
+%Extract only payload data subcarriers
 data_decoded_symbols_matrix = eq_data(data_idx, :);
 data_decoded_symbols = reshape(data_decoded_symbols_matrix, 1, []); % Parallel to serial
 
@@ -281,23 +275,23 @@ fprintf('Expected QPSK symbols: %d\n', N_mod_symbols);
 % Remove padded QPSK symbols from transmitter
 data_decoded_symbols = data_decoded_symbols(1:N_mod_symbols);
 
-%% QPSK Demodulation
+%QPSK Demodulation
 bits_decoded = qpsk_modulation.demodulate(data_decoded_symbols);
 
-%% Viterbi Decoding
+%Viterbi Decoding
 data_decoded_bits = channel_coding.decode(bits_decoded, Nbits_from_header, decoding_active);
 
-%% BER Calculation
+%BER Calculation
 num_errors = sum(bits ~= data_decoded_bits);
 BER = num_errors / Nbits_from_header;
 
 fprintf('Number of bit errors: %d\n', num_errors);
 fprintf('BER: %.6f\n', BER);
 
-%% Bit Rate
+%Bit Rate
 fprintf('bit rate: %.2f kbps\n', bit_rate/1000);
 
-%% Reconstruct file from decoded bits
+%Reconstruct file from decoded bits
 % Read 32-bit header to get file length
 header_bits = data_decoded_bits(1:32);
 file_len_rx = bi2de(double(header_bits), 'left-msb');
@@ -328,13 +322,13 @@ else
 end
 
 
-%% Constellation Plot
+%Constellation Plot
 figure;
 plot(real(data_decoded_symbols), imag(data_decoded_symbols), '.');
 grid on;
-xlabel('In-phase');
-ylabel('Quadrature');
-title('Equalized Data Constellation');
+xlabel('In-phase','FontSize',12);
+ylabel('Quadrature','FontSize',12);
+title('Received Equalized Data Constellation','FontSize',14);
 axis equal;
 
 delete('recorded_ofdm.wav');
